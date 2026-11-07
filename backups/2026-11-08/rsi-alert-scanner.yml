@@ -1,0 +1,37 @@
+name: RSI Telegram Scanner
+
+on:
+  schedule:
+    - cron: '20 9,15,21 * * *'
+      timezone: "America/New_York"
+  workflow_dispatch:
+
+concurrency:
+  group: rsi-telegram-scanner
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r rsi_alert_scanner/requirements.txt
+
+      - name: Check Python syntax
+        run: python -m py_compile rsi_alert_scanner/rsi_scanner.py
+
+      - name: Run continuous RSI scanner
+        env:
+          RSI_TELEGRAM_BOT_TOKEN: ${{ secrets.RSI_TELEGRAM_BOT_TOKEN }}
+          RSI_TELEGRAM_CHAT_ID: ${{ secrets.RSI_TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
+        run: python rsi_alert_scanner/rsi_scanner.py
