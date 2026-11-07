@@ -71,7 +71,7 @@ def send_message(token, chat_id, text):
         log.exception("Telegram send failed")
         return False
 
-def build_stats_message(symbol, coin, active, period, interval, lookback_days, down, up):
+def build_stats_message(symbol, coin, active, mode, period, interval, lookback_days, level):
     try:
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         candles = get_candles(coin, interval, lookback_days)
@@ -104,17 +104,19 @@ def build_stats_message(symbol, coin, active, period, interval, lookback_days, d
             "RSI({}), {}: {:.2f} (закрытый: {:.2f})\n"
             "Цена: USD {:,.4f}\n"
             "Свеча: {}\n"
-            "Уровни: вниз {} / вверх {}"
+            "Режим: {}"
         ).format(
             symbol, "ВКЛЮЧЁН" if active else "выключен",
             period, interval, current_rsi, closed_rsi, price,
-            candle_status + ", " + candle_time, down, up
+            candle_status + ", " + candle_time,
+            ("RSI пересечение {} снизу вверх".format(level) if mode == "up"
+             else "RSI пересечение {} сверху вниз".format(level)) if active else "не активен"
         )
     except Exception as exc:
         log.exception("Stats request failed for %s", symbol)
         return "{}\n🔴 Ошибка получения данных: {}".format(symbol, str(exc)[:250])
 
-def poll_commands(state, token, chat_id, instruments, period, interval, down, up, lookback_days):
+def poll_commands(state, token, chat_id, instruments, period, interval, level, lookback_days):
     try:
         data = tg_call(token, "getUpdates", {
             "offset": int(state.get("telegram_offset", 0)) + 1,
@@ -125,6 +127,9 @@ def poll_commands(state, token, chat_id, instruments, period, interval, down, up
         log.exception("Telegram getUpdates failed")
         return
     active = set(state.get("active", []))
+    modes = state.setdefault("modes", {})
+    for symbol in active:
+        modes.setdefault(symbol, "down")
     last_processed = state.setdefault("last_processed", {})
     for update in data.get("result", []):
         state["telegram_offset"] = max(int(state.get("telegram_offset", 0)), int(update.get("update_id", 0)))
@@ -140,7 +145,7 @@ def poll_commands(state, token, chat_id, instruments, period, interval, down, up
         command = parts[0].split("@", 1)[0].lower()
         if command in ("/start", "/stop"):
             if len(parts) < 2:
-                send_message(token, chat_id, "Укажи тикер: /start TSLA или /stop TSLA")
+                send_message(token, chat_id, "Укажи тикер: /start TSLA или /start TSLA 63")
                 continue
             requested_symbol = parts[1].upper()
             symbol = {"SPACEX": "SPCX"}.get(requested_symbol, requested_symbol)
@@ -148,17 +153,27 @@ def poll_commands(state, token, chat_id, instruments, period, interval, down, up
                 send_message(token, chat_id, "Неизвестный тикер. Доступны: TSLA и SpaceX.")
                 continue
             if command == "/start":
+                if len(parts) > 2 and parts[2] != "63":
+                    send_message(token, chat_id, "Допустимый формат: /start TSLA или /start TSLA 63")
+                    continue
+                mode = "up" if len(parts) > 2 else "down"
                 active.add(symbol)
+                modes[symbol] = mode
                 last_processed.pop(symbol, None)
                 state.setdefault("live_rsi", {}).pop(symbol, None)
-                send_message(token, chat_id, "{}: мониторинг включён. RSI({}), {}. Уровни: {} вниз / {} вверх.".format(symbol, period, interval, down, up))
+                direction = "снизу вверх" if mode == "up" else "сверху вниз"
+                send_message(token, chat_id, "{}: мониторинг включён. RSI({}), {}. Уровень {} — пересечение {}.".format(symbol, period, interval, level, direction))
             else:
                 active.discard(symbol)
+                modes.pop(symbol, None)
                 last_processed.pop(symbol, None)
                 state.setdefault("live_rsi", {}).pop(symbol, None)
                 send_message(token, chat_id, symbol + ": мониторинг остановлен.")
         elif command == "/status":
-            status = ", ".join(sorted(active)) if active else "нет активных инструментов"
+            status = ", ".join(
+                "{} ({})".format(symbol, "63 снизу вверх" if modes.get(symbol) == "up" else "63 сверху вниз")
+                for symbol in sorted(active)
+            ) if active else "нет активных инструментов"
             send_message(token, chat_id, "Активный мониторинг: " + status)
         elif command == "/stats":
             requested = parts[1].upper() if len(parts) > 1 else None
@@ -169,14 +184,14 @@ def poll_commands(state, token, chat_id, instruments, period, interval, down, up
                 continue
             reports = [
                 build_stats_message(
-                    symbol, instruments[symbol], symbol in active,
-                    period, interval, lookback_days, down, up
+                    symbol, instruments[symbol], symbol in active, modes.get(symbol, "down"),
+                    period, interval, lookback_days, level
                 )
                 for symbol in symbols
             ]
             send_message(token, chat_id, "\n\n".join(reports))
         elif command in ("/help", "/commands"):
-            send_message(token, chat_id, "Команды:\n/start TSLA\n/stop TSLA\n/start SPCX\n/stop SPCX\n/status\n/stats — данные по обоим инструментам\n/stats TSLA или /stats SPCX")
+            send_message(token, chat_id, "Команды:\n/start TSLA — RSI 63 сверху вниз\n/start TSLA 63 — RSI 63 снизу вверх\n/stop TSLA\n/start SPCX\n/start SPCX 63\n/stop SPCX\n/status\n/stats — данные по обоим инструментам\n/stats TSLA или /stats SPCX")
     state["active"] = sorted(active)
 
 def in_regular_session(cfg):
@@ -241,7 +256,7 @@ def rsi_series(closes, period):
         result[i] = value(avg_gain, avg_loss)
     return result
 
-def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up, lookback_days):
+def scan_symbol(symbol, coin, state, token, chat_id, period, interval, level, lookback_days, mode):
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     candles = get_candles(coin, interval, lookback_days)
     closed = [c for c in candles if int(c["T"]) <= now_ms]
@@ -295,31 +310,31 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
                 int(last_closed["T"]) / 1000, tz=timezone.utc
             ).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
 
-            if pending_down and previous_close_rsi is not None and previous_close_rsi < down:
+            if mode == "down" and pending_down and previous_close_rsi is not None and previous_close_rsi < level:
                 if send_message(
                     token, chat_id,
                     "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся ниже {}\n"
                     "ТФ: {} | RSI({}): {:.2f}\n"
                     "Цена закрытия: USD {:,.4f}\n"
                     "Пятиминутная свеча закрылась ({})".format(
-                        symbol, down, interval, period, previous_close_rsi, close_price, close_time
+                        symbol, level, interval, period, previous_close_rsi, close_price, close_time
                     )
                 ):
                     pending_down = False
-                    log.info("%s: 5m close confirmed below %.2f, RSI %.2f", symbol, down, previous_close_rsi)
+                    log.info("%s: 5m close confirmed below %.2f, RSI %.2f", symbol, level, previous_close_rsi)
 
-            if pending_up and previous_close_rsi is not None and previous_close_rsi > up:
+            if mode == "up" and pending_up and previous_close_rsi is not None and previous_close_rsi > level:
                 if send_message(
                     token, chat_id,
                     "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся выше {}\n"
                     "ТФ: {} | RSI({}): {:.2f}\n"
                     "Цена закрытия: USD {:,.4f}\n"
                     "Пятиминутная свеча закрылась ({})".format(
-                        symbol, up, interval, period, previous_close_rsi, close_price, close_time
+                        symbol, level, interval, period, previous_close_rsi, close_price, close_time
                     )
                 ):
                     pending_up = False
-                    log.info("%s: 5m close confirmed above %.2f, RSI %.2f", symbol, up, previous_close_rsi)
+                    log.info("%s: 5m close confirmed above %.2f, RSI %.2f", symbol, level, previous_close_rsi)
 
         saved = {
             "candle_start": candle_start,
@@ -334,29 +349,29 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
     pending_down = bool(saved.get("pending_down", saved.get("alerted_down", False)))
     pending_up = bool(saved.get("pending_up", saved.get("alerted_up", False)))
 
-    if not pending_down and previous_rsi > down and current_rsi <= down:
+    if mode == "down" and not pending_down and previous_rsi > level and current_rsi <= level:
         msg = (
             "🔻 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СВЕРХУ ВНИЗ\n"
             "ТФ: {} | RSI({}): {:.2f}\n"
             "Текущая цена: USD {:,.4f}\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
-        ).format(symbol, down, interval, period, current_rsi, float(forming["c"]), candle_time)
+        ).format(symbol, level, interval, period, current_rsi, float(forming["c"]), candle_time)
         if send_message(token, chat_id, msg):
             saved["pending_down"] = True
-            log.info("%s: preliminary cross-down alert sent; waiting for a 5m close below %.2f", symbol, down)
+            log.info("%s: preliminary cross-down alert sent; waiting for a 5m close below %.2f", symbol, level)
         else:
             log.error("%s: cross-down alert delivery failed", symbol)
 
-    if not pending_up and previous_rsi < up and current_rsi >= up:
+    if mode == "up" and not pending_up and previous_rsi < level and current_rsi >= level:
         msg = (
             "🔺 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СНИЗУ ВВЕРХ\n"
             "ТФ: {} | RSI({}): {:.2f}\n"
             "Текущая цена: USD {:,.4f}\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
-        ).format(symbol, up, interval, period, current_rsi, float(forming["c"]), candle_time)
+        ).format(symbol, level, interval, period, current_rsi, float(forming["c"]), candle_time)
         if send_message(token, chat_id, msg):
             saved["pending_up"] = True
-            log.info("%s: preliminary cross-up alert sent; waiting for a 5m close above %.2f", symbol, up)
+            log.info("%s: preliminary cross-up alert sent; waiting for a 5m close above %.2f", symbol, level)
         else:
             log.error("%s: cross-up alert delivery failed", symbol)
 
@@ -365,10 +380,9 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
 def run_cycle(cfg, instruments, state, token, chat_id):
     period = cfg.getint("scanner", "rsi_period", fallback=14)
     interval = cfg.get("scanner", "interval", fallback="5m").strip()
-    down = cfg.getfloat("levels", "cross_down", fallback=63)
-    up = cfg.getfloat("levels", "cross_up", fallback=30)
+    level = cfg.getfloat("levels", "cross_down", fallback=63)
     lookback_days = cfg.getint("scanner", "lookback_days", fallback=5)
-    poll_commands(state, token, chat_id, instruments, period, interval, down, up, lookback_days)
+    poll_commands(state, token, chat_id, instruments, period, interval, level, lookback_days)
     if in_regular_session(cfg):
         for symbol in state.get("active", []):
             coin = instruments.get(symbol)
@@ -376,7 +390,8 @@ def run_cycle(cfg, instruments, state, token, chat_id):
                 log.warning("Active symbol %s is not configured", symbol)
                 continue
             try:
-                scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up, lookback_days)
+                mode = state.setdefault("modes", {}).get(symbol, "down")
+                scan_symbol(symbol, coin, state, token, chat_id, period, interval, level, lookback_days, mode)
             except Exception:
                 log.exception("Failed to scan %s", symbol)
     else:
