@@ -71,6 +71,49 @@ def send_message(token, chat_id, text):
         log.exception("Telegram send failed")
         return False
 
+def build_stats_message(symbol, coin, active, period, interval, lookback_days, down, up):
+    try:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        candles = get_candles(coin, interval, lookback_days)
+        closed = [c for c in candles if int(c["T"]) <= now_ms]
+        forming = [c for c in candles if int(c["t"]) <= now_ms < int(c["T"])]
+        if len(closed) < period + 1:
+            return "{}\n❌ Данных недостаточно для RSI({}). API ответил, свечей: {}".format(
+                symbol, period, len(closed)
+            )
+        closed_closes = [float(c["c"]) for c in closed]
+        closed_rsi = rsi_series(closed_closes, period)[-1]
+        if forming:
+            current = max(forming, key=lambda c: int(c["t"]))
+            current_rsi = rsi_series(closed_closes + [float(current["c"])], period)[-1]
+            price = float(current["c"])
+            candle_status = "текущая свеча, не закрыта"
+            candle_time = datetime.fromtimestamp(
+                int(current["t"]) / 1000, tz=timezone.utc
+            ).astimezone(ZoneInfo("America/New_York")).strftime("%H:%M ET")
+        else:
+            current_rsi = closed_rsi
+            price = float(closed[-1]["c"])
+            candle_status = "последняя закрытая свеча (текущая не получена)"
+            candle_time = datetime.fromtimestamp(
+                int(closed[-1]["T"]) / 1000, tz=timezone.utc
+            ).astimezone(ZoneInfo("America/New_York")).strftime("%H:%M ET")
+        return (
+            "🟢 {} — API Hyperliquid: OK\n"
+            "Мониторинг: {}\n"
+            "RSI({}), {}: {:.2f} (закрытый: {:.2f})\n"
+            "Цена: USD {:,.4f}\n"
+            "Свеча: {}\n"
+            "Уровни: вниз {} / вверх {}"
+        ).format(
+            symbol, "ВКЛЮЧЁН" if active else "выключен",
+            period, interval, current_rsi, closed_rsi, price,
+            candle_status + ", " + candle_time, down, up
+        )
+    except Exception as exc:
+        log.exception("Stats request failed for %s", symbol)
+        return "{}\n🔴 Ошибка получения данных: {}".format(symbol, str(exc)[:250])
+
 def poll_commands(state, token, chat_id, instruments, period, interval, down, up):
     try:
         data = tg_call(token, "getUpdates", {
@@ -117,8 +160,23 @@ def poll_commands(state, token, chat_id, instruments, period, interval, down, up
         elif command == "/status":
             status = ", ".join(sorted(active)) if active else "нет активных инструментов"
             send_message(token, chat_id, "Активный мониторинг: " + status)
+        elif command == "/stats":
+            requested = parts[1].upper() if len(parts) > 1 else None
+            requested = {"SPACEX": "SPCX"}.get(requested, requested)
+            symbols = [requested] if requested else sorted(instruments)
+            if any(symbol not in instruments for symbol in symbols):
+                send_message(token, chat_id, "Неизвестный тикер. Доступны: TSLA и SPCX.")
+                continue
+            reports = [
+                build_stats_message(
+                    symbol, instruments[symbol], symbol in active,
+                    period, interval, 5, down, up
+                )
+                for symbol in symbols
+            ]
+            send_message(token, chat_id, "\n\n".join(reports))
         elif command in ("/help", "/commands"):
-            send_message(token, chat_id, "Команды:\n/start TSLA\n/stop TSLA\n/start SPCX\n/stop SPCX\n/status")
+            send_message(token, chat_id, "Команды:\n/start TSLA\n/stop TSLA\n/start SPCX\n/stop SPCX\n/status\n/stats — данные по обоим инструментам\n/stats TSLA или /stats SPCX")
     state["active"] = sorted(active)
 
 def in_regular_session(cfg):
