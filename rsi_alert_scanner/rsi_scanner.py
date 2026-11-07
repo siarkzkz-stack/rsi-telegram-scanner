@@ -195,43 +195,107 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
     if len(closed) < period + 1:
         log.warning("%s: not enough closed candles for RSI", symbol)
         return
+
     closed_closes = [float(c["c"]) for c in closed]
     closed_rsi = rsi_series(closed_closes, period)[-1]
     current_rsi = rsi_series(closed_closes + [float(forming["c"])], period)[-1]
     if closed_rsi is None or current_rsi is None:
         return
+
     live = state.setdefault("live_rsi", {})
     saved = live.get(symbol)
     candle_start = int(forming["t"])
+    candle_time = datetime.fromtimestamp(
+        candle_start / 1000, tz=timezone.utc
+    ).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
+
     if not saved:
-        live[symbol] = {"candle_start": candle_start, "rsi": current_rsi}
+        live[symbol] = {
+            "candle_start": candle_start,
+            "rsi": current_rsi,
+            "previous_closed_rsi": closed_rsi,
+            "alerted_down": False,
+            "alerted_up": False,
+        }
         log.info("%s: live RSI baseline set to %.2f", symbol, current_rsi)
         return
+
+    # The previous 5m candle has just closed: confirm only a signal that
+    # was already reported intrabar and actually remained beyond the level.
+    if int(saved.get("candle_start", -1)) != candle_start:
+        previous_start = int(saved.get("candle_start", -1))
+        last_closed = next((c for c in closed if int(c["t"]) == previous_start), None)
+        if last_closed is not None:
+            close_index = next(i for i, c in enumerate(closed) if int(c["t"]) == previous_start)
+            closes_to_previous = [float(c["c"]) for c in closed[:close_index + 1]]
+            previous_close_rsi = rsi_series(closes_to_previous, period)[-1]
+            baseline_rsi = float(saved.get("previous_closed_rsi", previous_close_rsi))
+            close_price = float(last_closed["c"])
+            close_time = datetime.fromtimestamp(
+                int(last_closed["T"]) / 1000, tz=timezone.utc
+            ).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
+
+            if saved.get("alerted_down") and baseline_rsi > down and previous_close_rsi is not None and previous_close_rsi <= down:
+                send_message(
+                    token, chat_id,
+                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся ниже {}\n"
+                    "ТФ: {} | RSI({}): {:.2f}\n"
+                    "Цена закрытия: USD {:,.4f}\n"
+                    "Пятиминутная свеча закрылась ({})".format(
+                        symbol, down, interval, period, previous_close_rsi, close_price, close_time
+                    )
+                )
+                log.info("%s: 5m close confirmed cross down, RSI %.2f", symbol, previous_close_rsi)
+            elif saved.get("alerted_up") and baseline_rsi < up and previous_close_rsi is not None and previous_close_rsi >= up:
+                send_message(
+                    token, chat_id,
+                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся выше {}\n"
+                    "ТФ: {} | RSI({}): {:.2f}\n"
+                    "Цена закрытия: USD {:,.4f}\n"
+                    "Пятиминутная свеча закрылась ({})".format(
+                        symbol, up, interval, period, previous_close_rsi, close_price, close_time
+                    )
+                )
+                log.info("%s: 5m close confirmed cross up, RSI %.2f", symbol, previous_close_rsi)
+
+        saved = {
+            "candle_start": candle_start,
+            "rsi": current_rsi,
+            "previous_closed_rsi": closed_rsi,
+            "alerted_down": False,
+            "alerted_up": False,
+        }
+        live[symbol] = saved
+        return
+
     previous_rsi = float(saved["rsi"])
-    candle_time = datetime.fromtimestamp(candle_start / 1000, tz=timezone.utc).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
-    if previous_rsi > down and current_rsi <= down:
+    if previous_rsi > down and current_rsi <= down and not saved.get("alerted_down", False):
         msg = (
-            "🔻 {} — RSI пересёк {} СВЕРХУ ВНИЗ\n"
+            "🔻 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СВЕРХУ ВНИЗ\n"
             "ТФ: {} | RSI({}): {:.2f}\n"
             "Текущая цена: USD {:,.4f}\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
         ).format(symbol, down, interval, period, current_rsi, float(forming["c"]), candle_time)
-        if not send_message(token, chat_id, msg):
+        if send_message(token, chat_id, msg):
+            saved["alerted_down"] = True
+            log.info("%s: one intrabar cross-down alert sent, RSI %.2f", symbol, current_rsi)
+        else:
             log.error("%s: cross-down alert delivery failed", symbol)
-            return
-        log.info("%s: intrabar cross down sent, RSI %.2f", symbol, current_rsi)
-    elif previous_rsi < up and current_rsi >= up:
+
+    elif previous_rsi < up and current_rsi >= up and not saved.get("alerted_up", False):
         msg = (
-            "🔺 {} — RSI пересёк {} СНИЗУ ВВЕРХ\n"
+            "🔺 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СНИЗУ ВВЕРХ\n"
             "ТФ: {} | RSI({}): {:.2f}\n"
             "Текущая цена: USD {:,.4f}\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
         ).format(symbol, up, interval, period, current_rsi, float(forming["c"]), candle_time)
-        if not send_message(token, chat_id, msg):
+        if send_message(token, chat_id, msg):
+            saved["alerted_up"] = True
+            log.info("%s: one intrabar cross-up alert sent, RSI %.2f", symbol, current_rsi)
+        else:
             log.error("%s: cross-up alert delivery failed", symbol)
-            return
-        log.info("%s: intrabar cross up sent, RSI %.2f", symbol, current_rsi)
-    live[symbol] = {"candle_start": candle_start, "rsi": current_rsi}
+
+    saved["rsi"] = current_rsi
 
 def run_cycle(cfg, instruments, state, token, chat_id):
     period = cfg.getint("scanner", "rsi_period", fallback=14)
