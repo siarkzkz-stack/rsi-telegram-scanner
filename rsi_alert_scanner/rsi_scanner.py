@@ -114,7 +114,7 @@ def build_stats_message(symbol, coin, active, period, interval, lookback_days, d
         log.exception("Stats request failed for %s", symbol)
         return "{}\n🔴 Ошибка получения данных: {}".format(symbol, str(exc)[:250])
 
-def poll_commands(state, token, chat_id, instruments, period, interval, down, up):
+def poll_commands(state, token, chat_id, instruments, period, interval, down, up, lookback_days):
     try:
         data = tg_call(token, "getUpdates", {
             "offset": int(state.get("telegram_offset", 0)) + 1,
@@ -170,7 +170,7 @@ def poll_commands(state, token, chat_id, instruments, period, interval, down, up
             reports = [
                 build_stats_message(
                     symbol, instruments[symbol], symbol in active,
-                    period, interval, 5, down, up
+                    period, interval, lookback_days, down, up
                 )
                 for symbol in symbols
             ]
@@ -368,7 +368,7 @@ def run_cycle(cfg, instruments, state, token, chat_id):
     down = cfg.getfloat("levels", "cross_down", fallback=63)
     up = cfg.getfloat("levels", "cross_up", fallback=30)
     lookback_days = cfg.getint("scanner", "lookback_days", fallback=5)
-    poll_commands(state, token, chat_id, instruments, period, interval, down, up)
+    poll_commands(state, token, chat_id, instruments, period, interval, down, up, lookback_days)
     if in_regular_session(cfg):
         for symbol in state.get("active", []):
             coin = instruments.get(symbol)
