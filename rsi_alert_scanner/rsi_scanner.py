@@ -213,85 +213,92 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
         live[symbol] = {
             "candle_start": candle_start,
             "rsi": current_rsi,
-            "previous_closed_rsi": closed_rsi,
-            "alerted_down": False,
-            "alerted_up": False,
+            "pending_down": False,
+            "pending_up": False,
         }
         log.info("%s: live RSI baseline set to %.2f", symbol, current_rsi)
         return
 
-    # The previous 5m candle has just closed: confirm only a signal that
-    # was already reported intrabar and actually remained beyond the level.
+    # A preliminary alert stays pending across candle boundaries until a
+    # 5m candle actually closes beyond its threshold. This prevents repeated
+    # alerts while RSI keeps crossing the same level on successive candles.
     if int(saved.get("candle_start", -1)) != candle_start:
         previous_start = int(saved.get("candle_start", -1))
         last_closed = next((c for c in closed if int(c["t"]) == previous_start), None)
+        pending_down = bool(saved.get("pending_down", saved.get("alerted_down", False)))
+        pending_up = bool(saved.get("pending_up", saved.get("alerted_up", False)))
+
         if last_closed is not None:
             close_index = next(i for i, c in enumerate(closed) if int(c["t"]) == previous_start)
             closes_to_previous = [float(c["c"]) for c in closed[:close_index + 1]]
             previous_close_rsi = rsi_series(closes_to_previous, period)[-1]
-            baseline_rsi = float(saved.get("previous_closed_rsi", previous_close_rsi))
             close_price = float(last_closed["c"])
             close_time = datetime.fromtimestamp(
                 int(last_closed["T"]) / 1000, tz=timezone.utc
             ).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
 
-            if saved.get("alerted_down") and baseline_rsi > down and previous_close_rsi is not None and previous_close_rsi <= down:
-                send_message(
+            if pending_down and previous_close_rsi is not None and previous_close_rsi < down:
+                if send_message(
                     token, chat_id,
-                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся ниже {}\n"
-                    "ТФ: {} | RSI({}): {:.2f}\n"
-                    "Цена закрытия: USD {:,.4f}\n"
+                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся ниже {}\\n"
+                    "ТФ: {} | RSI({}): {:.2f}\\n"
+                    "Цена закрытия: USD {:,.4f}\\n"
                     "Пятиминутная свеча закрылась ({})".format(
                         symbol, down, interval, period, previous_close_rsi, close_price, close_time
                     )
-                )
-                log.info("%s: 5m close confirmed cross down, RSI %.2f", symbol, previous_close_rsi)
-            elif saved.get("alerted_up") and baseline_rsi < up and previous_close_rsi is not None and previous_close_rsi >= up:
-                send_message(
+                ):
+                    pending_down = False
+                    log.info("%s: 5m close confirmed below %.2f, RSI %.2f", symbol, down, previous_close_rsi)
+
+            if pending_up and previous_close_rsi is not None and previous_close_rsi > up:
+                if send_message(
                     token, chat_id,
-                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся выше {}\n"
-                    "ТФ: {} | RSI({}): {:.2f}\n"
-                    "Цена закрытия: USD {:,.4f}\n"
+                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся выше {}\\n"
+                    "ТФ: {} | RSI({}): {:.2f}\\n"
+                    "Цена закрытия: USD {:,.4f}\\n"
                     "Пятиминутная свеча закрылась ({})".format(
                         symbol, up, interval, period, previous_close_rsi, close_price, close_time
                     )
-                )
-                log.info("%s: 5m close confirmed cross up, RSI %.2f", symbol, previous_close_rsi)
+                ):
+                    pending_up = False
+                    log.info("%s: 5m close confirmed above %.2f, RSI %.2f", symbol, up, previous_close_rsi)
 
         saved = {
             "candle_start": candle_start,
             "rsi": current_rsi,
-            "previous_closed_rsi": closed_rsi,
-            "alerted_down": False,
-            "alerted_up": False,
+            "pending_down": pending_down,
+            "pending_up": pending_up,
         }
         live[symbol] = saved
         return
 
     previous_rsi = float(saved["rsi"])
-    if previous_rsi > down and current_rsi <= down and not saved.get("alerted_down", False):
+    pending_down = bool(saved.get("pending_down", saved.get("alerted_down", False)))
+    pending_up = bool(saved.get("pending_up", saved.get("alerted_up", False)))
+
+    if not pending_down and previous_rsi > down and current_rsi <= down:
         msg = (
-            "🔻 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СВЕРХУ ВНИЗ\n"
-            "ТФ: {} | RSI({}): {:.2f}\n"
-            "Текущая цена: USD {:,.4f}\n"
+            "🔻 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СВЕРХУ ВНИЗ\\n"
+            "ТФ: {} | RSI({}): {:.2f}\\n"
+            "Текущая цена: USD {:,.4f}\\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
         ).format(symbol, down, interval, period, current_rsi, float(forming["c"]), candle_time)
         if send_message(token, chat_id, msg):
-            saved["alerted_down"] = True
-            log.info("%s: one intrabar cross-down alert sent, RSI %.2f", symbol, current_rsi)
+            saved["pending_down"] = True
+            log.info("%s: preliminary cross-down alert sent; waiting for a 5m close below %.2f", symbol, down)
         else:
             log.error("%s: cross-down alert delivery failed", symbol)
 
-    elif previous_rsi < up and current_rsi >= up and not saved.get("alerted_up", False):
+    if not pending_up and previous_rsi < up and current_rsi >= up:
         msg = (
-            "🔺 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СНИЗУ ВВЕРХ\n"
-            "ТФ: {} | RSI({}): {:.2f}\n"
-            "Текущая цена: USD {:,.4f}\n"
+            "🔺 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СНИЗУ ВВЕРХ\\n"
+            "ТФ: {} | RSI({}): {:.2f}\\n"
+            "Текущая цена: USD {:,.4f}\\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
         ).format(symbol, up, interval, period, current_rsi, float(forming["c"]), candle_time)
         if send_message(token, chat_id, msg):
-            saved["alerted_up"] = True
-            log.info("%s: one intrabar cross-up alert sent, RSI %.2f", symbol, current_rsi)
+            saved["pending_up"] = True
+            log.info("%s: preliminary cross-up alert sent; waiting for a 5m close above %.2f", symbol, up)
         else:
             log.error("%s: cross-up alert delivery failed", symbol)
 
