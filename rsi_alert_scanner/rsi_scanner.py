@@ -240,9 +240,9 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
             if pending_down and previous_close_rsi is not None and previous_close_rsi < down:
                 if send_message(
                     token, chat_id,
-                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся ниже {}\\n"
-                    "ТФ: {} | RSI({}): {:.2f}\\n"
-                    "Цена закрытия: USD {:,.4f}\\n"
+                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся ниже {}\n"
+                    "ТФ: {} | RSI({}): {:.2f}\n"
+                    "Цена закрытия: USD {:,.4f}\n"
                     "Пятиминутная свеча закрылась ({})".format(
                         symbol, down, interval, period, previous_close_rsi, close_price, close_time
                     )
@@ -253,9 +253,9 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
             if pending_up and previous_close_rsi is not None and previous_close_rsi > up:
                 if send_message(
                     token, chat_id,
-                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся выше {}\\n"
-                    "ТФ: {} | RSI({}): {:.2f}\\n"
-                    "Цена закрытия: USD {:,.4f}\\n"
+                    "✅ {} — ПОДТВЕРЖДЕНИЕ: RSI закрылся выше {}\n"
+                    "ТФ: {} | RSI({}): {:.2f}\n"
+                    "Цена закрытия: USD {:,.4f}\n"
                     "Пятиминутная свеча закрылась ({})".format(
                         symbol, up, interval, period, previous_close_rsi, close_price, close_time
                     )
@@ -278,9 +278,9 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
 
     if not pending_down and previous_rsi > down and current_rsi <= down:
         msg = (
-            "🔻 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СВЕРХУ ВНИЗ\\n"
-            "ТФ: {} | RSI({}): {:.2f}\\n"
-            "Текущая цена: USD {:,.4f}\\n"
+            "🔻 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СВЕРХУ ВНИЗ\n"
+            "ТФ: {} | RSI({}): {:.2f}\n"
+            "Текущая цена: USD {:,.4f}\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
         ).format(symbol, down, interval, period, current_rsi, float(forming["c"]), candle_time)
         if send_message(token, chat_id, msg):
@@ -291,9 +291,9 @@ def scan_symbol(symbol, coin, state, token, chat_id, period, interval, down, up,
 
     if not pending_up and previous_rsi < up and current_rsi >= up:
         msg = (
-            "🔺 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СНИЗУ ВВЕРХ\\n"
-            "ТФ: {} | RSI({}): {:.2f}\\n"
-            "Текущая цена: USD {:,.4f}\\n"
+            "🔺 {} — ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ: RSI пересёк {} СНИЗУ ВВЕРХ\n"
+            "ТФ: {} | RSI({}): {:.2f}\n"
+            "Текущая цена: USD {:,.4f}\n"
             "Пятиминутная свеча ещё НЕ закрыта ({})"
         ).format(symbol, up, interval, period, current_rsi, float(forming["c"]), candle_time)
         if send_message(token, chat_id, msg):
