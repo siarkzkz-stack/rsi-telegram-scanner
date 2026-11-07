@@ -1,0 +1,58 @@
+name: RSI Telegram Scanner
+
+on:
+  schedule:
+    - cron: '20 13 * * 1-5'
+    - cron: '20 14 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: rsi-telegram-scanner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check New York start time
+        id: schedule
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          hour=$(TZ=America/New_York date +%H)
+          minute=$(TZ=America/New_York date +%M)
+          if [ "$hour" = "09" ] && [ "$minute" -ge 20 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.schedule.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.schedule.outputs.run == 'true'
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.schedule.outputs.run == 'true'
+        run: pip install -r rsi_alert_scanner/requirements.txt
+
+      - name: Check Python syntax
+        if: steps.schedule.outputs.run == 'true'
+        run: python -m py_compile rsi_alert_scanner/rsi_scanner.py
+
+      - name: Run continuous RSI scanner
+        if: steps.schedule.outputs.run == 'true'
+        env:
+          RSI_TELEGRAM_BOT_TOKEN: ${{ secrets.RSI_TELEGRAM_BOT_TOKEN }}
+          RSI_TELEGRAM_CHAT_ID: ${{ secrets.RSI_TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
+        run: python rsi_alert_scanner/rsi_scanner.py
