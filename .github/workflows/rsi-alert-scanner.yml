@@ -2,9 +2,7 @@ name: RSI Telegram Scanner
 
 on:
   schedule:
-    - cron: '0 19 * * 1-5'
-      timezone: "Asia/Almaty"
-    - cron: '0 1 * * 2-5'
+    - cron: '0 19 * * *'
       timezone: "Asia/Almaty"
   workflow_dispatch:
 
