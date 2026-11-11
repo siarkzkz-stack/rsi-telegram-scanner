@@ -2,7 +2,8 @@ name: RSI Telegram Scanner
 
 on:
   schedule:
-    - cron: '0 19 * * 1-5'
+    # Start the workflow before 19:00 to avoid GitHub's busy top-of-hour queue.
+    - cron: '45 18 * * 1-5'
       timezone: "Asia/Almaty"
   workflow_dispatch:
 
@@ -14,7 +15,27 @@ permissions:
   contents: read
 
 jobs:
+  wait_for_start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Wait until 19:00 Almaty on scheduled runs
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          target="$(TZ=Asia/Almaty date -d '19:00 today' +%s)"
+          now="$(date +%s)"
+          if [ "$now" -lt "$target" ]; then
+            echo "Waiting until 19:00 Asia/Almaty"
+            sleep "$((target - now))"
+          else
+            echo "Scheduled job started after 19:00; starting scanner immediately"
+          fi
+          date '+Scanner handoff time (UTC): %Y-%m-%d %H:%M:%S'
+          TZ=Asia/Almaty date '+Almaty time: %Y-%m-%d %H:%M:%S'
+
   scan:
+    needs: wait_for_start
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
