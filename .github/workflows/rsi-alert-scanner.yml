@@ -2,40 +2,20 @@ name: RSI Telegram Scanner
 
 on:
   schedule:
-    # Start the workflow before 19:00 to avoid GitHub's busy top-of-hour queue.
-    - cron: '45 18 * * 1-5'
-      timezone: "Asia/Almaty"
+    # Almaty is UTC+5: start at 19:00 and restart at 01:00 local time.
+    # Each process exits cleanly after 5h50m, before GitHub's 6h hard limit.
+    - cron: '0 14,20 * * *'
   workflow_dispatch:
 
 concurrency:
   group: rsi-telegram-scanner
-  queue: max
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  wait_for_start:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Wait until 19:00 Almaty on scheduled runs
-        if: github.event_name == 'schedule'
-        shell: bash
-        run: |
-          target="$(TZ=Asia/Almaty date -d '19:00 today' +%s)"
-          now="$(date +%s)"
-          if [ "$now" -lt "$target" ]; then
-            echo "Waiting until 19:00 Asia/Almaty"
-            sleep "$((target - now))"
-          else
-            echo "Scheduled job started after 19:00; starting scanner immediately"
-          fi
-          date '+Scanner handoff time (UTC): %Y-%m-%d %H:%M:%S'
-          TZ=Asia/Almaty date '+Almaty time: %Y-%m-%d %H:%M:%S'
-
   scan:
-    needs: wait_for_start
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -55,4 +35,5 @@ jobs:
         env:
           RSI_TELEGRAM_BOT_TOKEN: ${{ secrets.RSI_TELEGRAM_BOT_TOKEN }}
           RSI_TELEGRAM_CHAT_ID: ${{ secrets.RSI_TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
+          SCANNER_MAX_RUNTIME_MINUTES: '350'
         run: python rsi_alert_scanner/rsi_scanner.py
