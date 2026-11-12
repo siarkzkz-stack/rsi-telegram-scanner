@@ -3,10 +3,26 @@ import json
 import logging
 import os
 import sys
+import time as time_module
 from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Retry transient connection failures and HTTP 429/5xx responses.
+# Do not retry read timeouts on POST: Telegram may already have accepted a message.
+_RETRY = Retry(
+    total=5, connect=5, read=0, status=5,
+    backoff_factor=1.0,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset(["POST"]),
+    respect_retry_after_header=True,
+)
+HTTP = requests.Session()
+HTTP.mount("https://", HTTPAdapter(max_retries=_RETRY))
+HTTP.mount("http://", HTTPAdapter(max_retries=_RETRY))
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.cfg"
@@ -56,7 +72,7 @@ def save_state(state):
     temp.replace(STATE_FILE)
 
 def tg_call(token, method, payload):
-    response = requests.post(TG_API.format(token, method), json=payload, timeout=20)
+    response = HTTP.post(TG_API.format(token, method), json=payload, timeout=(10, 20))
     response.raise_for_status()
     data = response.json()
     if not data.get("ok"):
@@ -198,11 +214,11 @@ def interval_duration_ms(interval):
 def get_candles(coin, interval, lookback_days):
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     start_ms = now_ms - lookback_days * 86400000
-    response = requests.post(
+    response = HTTP.post(
         HL_INFO,
         json={"type": "candleSnapshot", "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": now_ms + interval_duration_ms(interval)}},
         headers={"Content-Type": "application/json"},
-        timeout=20,
+        timeout=(10, 25),
     )
     response.raise_for_status()
     candles = response.json()
@@ -394,15 +410,26 @@ def main():
         log.error("Missing GitHub Secret RSI_TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID")
         return 2
     state = load_state()
-    log.info("Command-controlled RSI monitor started: scans only individually activated instruments, every 60 seconds")
+    max_runtime_minutes = int(os.getenv("SCANNER_MAX_RUNTIME_MINUTES", "350"))
+    if max_runtime_minutes < 1 or max_runtime_minutes > 350:
+        raise ValueError("SCANNER_MAX_RUNTIME_MINUTES must be between 1 and 350")
+    started_monotonic = time_module.monotonic()
+    log.info(
+        "Command-controlled RSI monitor started: scans every 60 seconds; "
+        "will exit cleanly after %s minutes (GitHub runner limit safe)",
+        max_runtime_minutes,
+    )
     try:
         while True:
-            cycle_started = datetime.now(timezone.utc)
+            cycle_started = time_module.monotonic()
             run_cycle(cfg, instruments, state, token, chat_id)
-            elapsed = (datetime.now(timezone.utc) - cycle_started).total_seconds()
-            time_to_next_check = max(1, 60 - int(elapsed))
-            import time as time_module
-            time_module.sleep(time_to_next_check)
+            elapsed_total = (time_module.monotonic() - started_monotonic) / 60
+            if elapsed_total >= max_runtime_minutes:
+                log.info("Planned runtime reached (%.1f min); exiting cleanly for scheduled restart", elapsed_total)
+                return 0
+            cycle_elapsed = time_module.monotonic() - cycle_started
+            remaining_seconds = max(1, max_runtime_minutes * 60 - (time_module.monotonic() - started_monotonic))
+            time_module.sleep(min(max(1, 60 - int(cycle_elapsed)), remaining_seconds))
     except KeyboardInterrupt:
         log.info("RSI monitor stopped")
     return 0
