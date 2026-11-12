@@ -25,6 +25,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Restore scanner state from previous run
+        uses: actions/cache/restore@v4
+        with:
+          path: rsi_alert_scanner/.state/state.json
+          key: rsi-scanner-state-${{ github.run_id }}
+          restore-keys: |
+            rsi-scanner-state-
+
       - name: Install dependencies
         run: pip install -r rsi_alert_scanner/requirements.txt
 
@@ -37,3 +45,10 @@ jobs:
           RSI_TELEGRAM_CHAT_ID: ${{ secrets.RSI_TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
           SCANNER_MAX_RUNTIME_MINUTES: '350'
         run: python rsi_alert_scanner/rsi_scanner.py
+
+      - name: Save scanner state for the next scheduled run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: rsi_alert_scanner/.state/state.json
+          key: rsi-scanner-state-${{ github.run_id }}
