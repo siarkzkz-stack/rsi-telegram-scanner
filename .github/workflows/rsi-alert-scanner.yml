@@ -2,9 +2,9 @@ name: RSI Telegram Scanner
 
 on:
   schedule:
-    # Almaty is UTC+5: start at 19:00 and restart at 01:00 local time.
-    # Each process exits cleanly after 5h50m, before GitHub's 6h hard limit.
-    - cron: '0 14,20 * * *'
+    # Almaty is UTC+5: 19:00 local time, Monday through Friday.
+    # GitHub Actions cron uses UTC.
+    - cron: '0 14 * * 1-5'
   workflow_dispatch:
 
 concurrency:
