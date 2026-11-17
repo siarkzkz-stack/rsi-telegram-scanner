@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: rsi-telegram-scanner
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
