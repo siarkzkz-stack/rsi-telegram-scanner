@@ -2,9 +2,9 @@ name: RSI Telegram Scanner
 
 on:
   schedule:
-    # Almaty is UTC+5: 19:10 local time, Monday through Friday.
-    # GitHub Actions cron uses UTC.
-    - cron: '10 14 * * 1-5'
+    # Start at 19:10 Almaty time, Monday through Friday.
+    - cron: '10 19 * * 1-5'
+      timezone: 'Asia/Almaty'
   workflow_dispatch:
 
 concurrency:
