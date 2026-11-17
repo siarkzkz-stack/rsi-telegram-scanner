@@ -2,7 +2,7 @@ name: RSI Telegram Scanner
 
 on:
   schedule:
-    # Start at 19:10 Almaty time, Monday through Friday.
+    # Start at 19:10 Almaty time, Monday through Friday. Stale queued runs are cancelled on a new deployment.
     - cron: '10 19 * * 1-5'
       timezone: 'Asia/Almaty'
   push:
